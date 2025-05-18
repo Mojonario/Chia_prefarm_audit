@@ -1,0 +1,3 @@
+[submodule "internal-custody"]
+	path = internal-custody
+	url = https://github.com/Chia-Network/internal-custody
