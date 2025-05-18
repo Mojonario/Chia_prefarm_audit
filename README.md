@@ -22,7 +22,7 @@ Objetivo: facilitar el seguimiento y análisis histórico de los movimientos de 
 1. Clonar el repositorio:
 
 ```bash
-git clone https://github.com/Mojonario/Mojonario.git chia_prefarm_audit
+git clone https://github.com/Mojonario/Chia_prefarm_audit.git chia_prefarm_audit
 cd C:\Users\<usuario>\chia_prefarm_audit  # ir a la carpeta del proyecto
 ```
 
