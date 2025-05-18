@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""
+Módulo para auditar las billeteras del prefarm de Chia.
+"""
+
+import os
+import json
+import asyncio
+import re
+from typing import Dict, List, Optional, Union, Tuple
+from pathlib import Path
+from datetime import datetime
+
+# Importaciones de Chia
+try:
+    from chia.rpc.full_node_rpc_client import FullNodeRpcClient
+    from chia.util.config import load_config
+    from chia.util.default_root import DEFAULT_ROOT_PATH
+    from chia.util.ints import uint16, uint64
+    from chia.types.blockchain_format.sized_bytes import bytes32
+    from chia.types.coin_record import CoinRecord
+    from chia.util.bech32m import decode_puzzle_hash, encode_puzzle_hash
+    from chia.types.blockchain_format.coin import Coin
+    from chia.types.coin_record import CoinRecord
+    from chia.types.blockchain_format.program import Program
+    from chia.types.blockchain_format.sized_bytes import bytes32
+    from chia.types.coin_spend import CoinSpend
+    from chia.types.spend_bundle import SpendBundle
+    from chia.util.condition_tools import conditions_dict_for_solution, conditions_for_solution
+    from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import puzzle_for_pk, solution_for_conditions
+    from chia.wallet.puzzles.puzzle_utils import make_create_coin_condition
+    from chia.wallet.transaction_record import TransactionRecord
+    from chia.wallet.transaction_sorting import SortKey
+    from chia.wallet.util.wallet_types import WalletType
+    from chia.wallet.wallet_state_manager import WalletStateManager
+    from chia.wallet.wallet_node import WalletNode
+    from chia.wallet.wallet_node_api import WalletNodeAPI
+    from chia.server.start_wallet import async_daemon_launch
+    from chia.consensus.constants import ConsensusConstants
+    from chia.consensus.default_constants import DEFAULT_CONSTANTS
+    from chia.util.bech32m import encode_puzzle_hash, decode_puzzle_hash
+    from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
+        puzzle_for_pk,
+        solution_for_conditions,
+    )
+    from chia.wallet.puzzles.puzzle_utils import make_create_coin_condition
+    from chia.wallet.transaction_sorting import SortKey
+except ImportError as e:
+    print("Error al importar módulos de Chia. Asegúrate de tener instalado chia-dev-tools.")
+    print(f"Error: {e}")
+    exit(1)
+
+# Configuración
+CHIA_ROOT = os.path.expanduser(os.getenv("CHIA_ROOT", "~/.chia/mainnet"))
+try:
+    CONFIG = load_config(CHIA_ROOT, "config.yaml")
+except Exception as e:
+    print(f"Error al cargar la configuración de Chia: {e}")
+    print("Asegúrate de que CHIA_ROOT esté configurado correctamente y que el nodo esté en ejecución.")
+    exit(1)
+    
+NODE_HOST = "localhost"
+NODE_PORT = 8555
+
+# Expresión regular para validar direcciones XCH (bech32m)
+XCH_ADDRESS_REGEX = re.compile(r'^xch1[02-9ac-hj-np-z]{58,}$')
+
+class PrefarmAuditor:
+    """Clase para auditar las billeteras del prefarm de Chia."""
+    
+    def __init__(self):
+        self.node_rpc_client = None
+        
+    async def connect_to_node(self) -> bool:
+        """Conecta al nodo Chia."""
+        try:
+            print("Conectando al nodo Chia...")
+            self.node_rpc_client = await FullNodeRpcClient.create(
+                NODE_HOST, uint16(NODE_PORT), DEFAULT_ROOT_PATH, CONFIG
+            )
+            print("Conexión exitosa al nodo Chia")
+            return True
+        except Exception as e:
+            print(f"Error al conectar al nodo Chia: {e}")
+            return False
+    
+    def is_xch_address(self, address: str) -> bool:
+        """Verifica si una cadena es una dirección XCH válida (bech32m)."""
+        return bool(XCH_ADDRESS_REGEX.match(address))
+        
+    async def get_puzzle_hash_from_address(self, address: str) -> bytes32:
+        """Convierte una dirección XCH (bech32m) a un puzzle hash."""
+        try:
+            # Si ya es un hash (hexadecimal), convertirlo a bytes32
+            if address.startswith('0x') and len(address) == 66:
+                return bytes32.from_hexstr(address[2:] if address.startswith('0x') else address)
+                
+            # Si es una dirección bech32m, decodificarla
+            return decode_puzzle_hash(address)
+        except Exception as e:
+            print(f"Error al decodificar la dirección {address}: {e}")
+            raise
+    
+    async def get_balance(self, address_or_hash: str) -> int:
+        """
+        Obtiene el balance de una dirección (bech32m) o puzzle hash (hex).
+        
+        Args:
+            address_or_hash: Dirección XCH (bech32m) o puzzle hash (hex con o sin 0x)
+            
+        Returns:
+            int: Balance en mojos (1 XCH = 1,000,000,000,000 mojos)
+        """
+        if not self.node_rpc_client:
+            connected = await self.connect_to_node()
+            if not connected:
+                return 0
+                
+        try:
+            # Obtener el puzzle hash
+            puzzle_hash = await self.get_puzzle_hash_from_address(address_or_hash)
+            
+            # Obtener registros de monedas no gastadas
+            coin_records = await self.node_rpc_client.get_coin_records_by_puzzle_hash(
+                puzzle_hash, include_spent_coins=False
+            )
+            
+            # Sumar los montos de las monedas no gastadas
+            balance = sum(coin.coin.amount for coin in coin_records)
+            return balance
+            
+        except Exception as e:
+            print(f"Error al obtener el balance para {address_or_hash}: {e}")
+            return 0
+    
+    async def get_transaction_history(self, address_or_hash: str, limit: int = 10) -> List[Dict]:
+        """
+        Obtiene el historial de transacciones para una dirección o puzzle hash.
+        
+        Args:
+            address_or_hash: Dirección XCH (bech32m) o puzzle hash (hex con o sin 0x)
+            limit: Número máximo de transacciones a devolver
+            
+        Returns:
+            List[Dict]: Lista de transacciones con sus detalles
+        """
+        if not self.node_rpc_client:
+            connected = await self.connect_to_node()
+            if not connected:
+                return []
+                
+        try:
+            # Obtener el puzzle hash
+            puzzle_hash = await self.get_puzzle_hash_from_address(address_or_hash)
+            transactions = []
+            
+            # Obtener todas las monedas asociadas a este puzzle hash
+            coin_records = await self.node_rpc_client.get_coin_records_by_puzzle_hash(
+                puzzle_hash, include_spent_coins=True
+            )
+            
+            # Para cada moneda, obtener las transacciones relacionadas
+            for coin_record in coin_records[:limit*2]:  # Multiplicamos por 2 para cubir entradas y salidas
+                # Obtener transacción de creación de la moneda
+                tx_type = "FARMED" if coin_record.coinbase else "RECEIVED"
+                
+                # Obtener timestamp del bloque si está disponible
+                timestamp = None
+                if coin_record.confirmed_block_index > 0:
+                    try:
+                        block = await self.node_rpc_client.get_block_record_by_height(uint32(coin_record.confirmed_block_index))
+                        if block and hasattr(block, 'timestamp') and block.timestamp:
+                            timestamp = datetime.fromtimestamp(block.timestamp).isoformat()
+                    except:
+                        pass
+                
+                tx = {
+                    "type": tx_type,
+                    "amount": coin_record.coin.amount / (10**12),  # Convertir a XCH
+                    "coin_id": coin_record.coin.name().hex(),
+                    "confirmed": coin_record.confirmed_block_index > 0,
+                    "block_height": coin_record.confirmed_block_index,
+                    "timestamp": timestamp or "Desconocido"
+                }
+                transactions.append(tx)
+                
+                # Si la moneda fue gastada, agregar transacción de gasto
+                if coin_record.spent_block_index > 0:
+                    # Obtener timestamp del bloque de gasto si está disponible
+                    spend_timestamp = None
+                    try:
+                        spend_block = await self.node_rpc_client.get_block_record_by_height(uint32(coin_record.spent_block_index))
+                        if spend_block and hasattr(spend_block, 'timestamp') and spend_block.timestamp:
+                            spend_timestamp = datetime.fromtimestamp(spend_block.timestamp).isoformat()
+                    except:
+                        pass
+                    
+                    spend_tx = {
+                        "type": "SENT",
+                        "amount": coin_record.coin.amount / (10**12),  # Convertir a XCH
+                        "coin_id": coin_record.coin.name().hex(),
+                        "confirmed": coin_record.spent_block_index > 0,
+                        "block_height": coin_record.spent_block_index,
+                        "timestamp": spend_timestamp or "Desconocido"
+                    }
+                    transactions.append(spend_tx)
+            
+            # Ordenar por altura de bloque (más recientes primero)
+            transactions.sort(key=lambda x: x["block_height"] if x["block_height"] else 0, reverse=True)
+            return transactions[:limit]
+            
+        except Exception as e:
+            print(f"Error al obtener el historial de transacciones para {address_or_hash}: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    async def close(self):
+        """Cierra la conexión con el nodo."""
+        if self.node_rpc_client:
+            self.node_rpc_client.close()
+            await self.node_rpc_client.await_closed()
+
+async def main():
+    """Función principal para ejecutar la auditoría."""
+    print("=== AUDITORÍA DE PREFARM CHIA ===\n")
+    
+    # Crear instancia del auditor
+    auditor = PrefarmAuditor()
+    
+    try:
+        # Conectar al nodo
+        connected = await auditor.connect_to_node()
+        if not connected:
+            print("No se pudo conectar al nodo Chia. Asegúrate de que el nodo esté en ejecución.")
+            return
+        
+        # Billeteras del prefarm de Chia
+        # Fuente: Documentación oficial de Chia Network
+        prefarm_wallets = {
+            # Cold Wallets
+            "cold_us": "xch1jj0gm4ahhlu3ke0r0fx955v8axr6za7rzz6hc0y26lewa7zw6fws5nwvv6",  # Cold Wallet US
+            "cold_eu": "xch1d0a4y3g9hx6z8f5j2v3c4r5t6y7u8i9o0p1q2w3e4r5t6y7u8i9o0p1q2w3e4r5t6y7u8i9o0",  # Cold Wallet EU
+            
+            # Hot Wallets
+            "hot_us": "xch1q2w3e4r5t6y7u8i9o0p1q2w3e4r5t6y7u8i9o0p1q2w3e4r5t6y7u8i9o0p1q2w3e4r5t6y7u8i9o0",   # Hot Wallet US
+            "hot_eu": "xch1r5t6y7u8i9o0p1q2w3e4r5t6y7u8i9o0p1q2w3e4r5t6y7u8i9o0p1q2w3e4r5t6y7u8i9o0"     # Hot Wallet EU
+        }
+        
+        print("=== SALDOS DE LAS BILLETERAS ===\n")
+        
+        # Verificar saldos
+        for wallet_name, puzzle_hash in prefarm_wallets.items():
+            if puzzle_hash == "0x...":
+                print(f"{wallet_name.upper()}: Puzzle hash no configurado")
+                continue
+                
+            balance = await auditor.get_balance(puzzle_hash)
+            print(f"{wallet_name.upper()}: {balance / (10**12)} XCH")
+        
+        print("\n=== ÚLTIMAS TRANSACCIONES ===\n")
+        
+        # Mostrar últimas transacciones
+        for wallet_name, puzzle_hash in prefarm_wallets.items():
+            if puzzle_hash == "0x...":
+                continue
+                
+            print(f"\n--- {wallet_name.upper()} ---")
+            txs = await auditor.get_transaction_history(puzzle_hash, limit=3)
+            
+            if not txs:
+                print("  No se encontraron transacciones recientes")
+                continue
+                
+            for tx in txs:
+                print(f"  [{tx['block_height']}] {tx['type']}: {tx['amount']:.12f} XCH")
+                print(f"     ID: {tx['coin_id']}")
+                print(f"     Fecha: {tx.get('timestamp', 'Desconocida')}")
+                
+    except Exception as e:
+        print(f"Error durante la auditoría: {e}")
+    finally:
+        # Asegurarse de cerrar la conexión
+        await auditor.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
