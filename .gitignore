@@ -1,10 +1,6 @@
-# Entornos virtuales obsoletos
-env_chia/
-env_audit/
-
-# Entorno unificado
-env/
-
 # Caché de Python
 __pycache__/
 *.pyc
+# Ignorar entorno virtual y variables de entorno
+venv/
+.env
