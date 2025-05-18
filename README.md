@@ -1,123 +1,110 @@
 # Chia Prefarm Audit Tools
 
-Herramientas para auditar y monitorear las billeteras del prefarm de Chia.
+Auditoría y sincronización de la hot wallet del prefarm de Chia, con exportación a CSV e ingestión en PostgreSQL.
 
 ## Requisitos
 
+- Git
 - Python 3.9+
-- Nodo Chia completo sincronizado
-- Dependencias: `pip install -r requirements.txt`
+- PostgreSQL (o un servicio compatible)
+- Nodo Chia completo sincronizado (RPC abierto en localhost:8555)
 
-## Herramientas
+## Instalación
 
-### 1. Verificación de Saldos
-
-Verifica los saldos actuales de las direcciones del prefarm.
+1. Clonar el repositorio:
 
 ```bash
-python scripts/check_prefarm_balances.py
+git clone https://github.com/Mojonario/Mojonario.git chia_prefarm_audit
+cd chia_prefarm_audit
 ```
 
-Ejemplo de salida:
-```
-=== SALDOS DEL PREFARM CHIA ===
-----------------------------------------
-Cold US:
-  Dirección: xch1jj0gm4ahhlu3ke0r0fx955v8axr6za7rzz6hc0y26lewa7zw6fws5nwvv6
-  Saldo: 1,234,567.890123 XCH
+2. Configurar variables de entorno:
 
-...
-----------------------------------------
-SALDO TOTAL: 4,567,890.123456 XCH
-========================================
-```
-
-### 2. Monitoreo de Transacciones
-
-Monitorea transacciones en tiempo real en las direcciones del prefarm.
-
-```bash
-python scripts/monitor_transactions.py
-```
-
-### 3. Utilidad de Direcciones
-
-Convierte entre direcciones y puzzle hashes.
-
-```bash
-# De dirección a puzzle hash
-python scripts/address_utils.py to-puzzle-hash xch1jj0gm4ahhlu3ke0r0fx955v8axr6za7rzz6hc0y26lewa7zw6fws5nwvv6
-
-# De puzzle hash a dirección
-python scripts/address_utils.py to-address 0x1234... --prefix xch
-```
-
-## Configuración
-
-### Variables de Entorno
-
-Crea un archivo `.env` en la raíz del proyecto:
+Crear `.env` con:
 
 ```env
-# Configuración del nodo Chia
-NODE_HOST=localhost
-NODE_RPC_PORT=8555
-
-# Directorios
-SNAPSHOTS_DIR=./snapshots
-LOG_LEVEL=INFO
+DATABASE_URL=postgresql://<user>:<pass>@<host>:<port>/<db>
 ```
 
-## Estructura del Proyecto
+3. Crear y activar entorno virtual:
+
+- Windows (PowerShell):
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+- Ubuntu/Linux (bash):
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+4. Instalar dependencias:
+
+```bash
+pip install --upgrade pip setuptools wheel
+pip install chia-internal-custody
+pip install -r requirements.txt
+```
+
+## Uso
+
+### Crear tabla en PostgreSQL
+
+```bash
+python scripts/init_prefarmdb.py
+```
+
+### Flujo completo de actualización
+
+```bash
+python scripts/update_prefarmdb.py
+```
+
+Este script ejecuta:
+
+1. `cic sync` y `cic audit` para la hot wallet.
+2. Procesa `csv/warm_us_audit.csv` a `csv/warm_us_summary.csv`.
+3. Copia el resumen a `Desktop/Chia.report/prefarm_data/`.
+4. Ingiere los datos en la tabla `prefarmdb` de PostgreSQL.
+
+### Solo ingestión (tienes el summary CSV)
+
+```bash
+python scripts/ingest_prefarmdb.py -s csv/warm_us_summary.csv
+```
+
+## Estructura del proyecto
 
 ```
 chia_prefarm_audit/
-├── scripts/
-│   ├── check_prefarm_balances.py  # Verificación de saldos
-│   ├── monitor_transactions.py    # Monitoreo de transacciones
-│   ├── address_utils.py          # Utilidades de direcciones
-│   └── chia_db.py                # Clase para interactuar con la blockchain
-├── snapshots/                    # Instantáneas de estados
-├── logs/                         # Archivos de registro
-├── .env                          # Variables de entorno
-└── README.md                     # Este archivo
+├── .env                # Variables reales (no versionar)
+├── .env.utf8           # Plantilla UTF-8
+├── requirements.txt    # Dependencias pip
+├── create_prefarmdb.sql# DDL de la tabla prefarmdb
+├── csv/                # Archivos CSV (raw y summary)
+│   ├── warm_us_audit.csv
+│   └── warm_us_summary.csv
+├── sync/               # sync_warm_us.sqlite (DB local cic)
+├── internal-custody/   # Submódulo con configs de cic
+├── scripts/            # Scripts Python ejecutables
+│   ├── init_prefarmdb.py
+│   ├── cic_audit_helper.py
+│   ├── ingest_prefarmdb.py
+│   └── update_prefarmdb.py
+└── venv/               # Entorno virtual
 ```
 
-## Uso Avanzado
+## Variables de entorno
 
-### Monitoreo Continuo con systemd (Linux)
-
-Crea un servicio systemd para el monitoreo continuo:
-
-```ini
-# /etc/systemd/system/chia-prefarm-monitor.service
-[Unit]
-Description=Chia Prefarm Monitor
-After=network.target
-
-[Service]
-User=usuario
-WorkingDirectory=/ruta/a/chia_prefarm_audit
-ExecStart=/usr/bin/python3 /ruta/a/chia_prefarm_audit/scripts/monitor_transactions.py
-Restart=always
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Alertas por Correo Electrónico
-
-Configura alertas por correo electrónico modificando el script `monitor_transactions.py`.
-
-## Contribución
-
-1. Haz un fork del repositorio
-2. Crea una rama para tu característica (`git checkout -b feature/nueva-funcionalidad`)
-3. Haz commit de tus cambios (`git commit -am 'Añadir nueva funcionalidad'`)
-4. Haz push a la rama (`git push origin feature/nueva-funcionalidad`)
-5. Abre un Pull Request
+| Variable         | Descripción                                  |
+|------------------|----------------------------------------------|
+| DATABASE_URL     | Cadena de conexión a PostgreSQL              |
+| PREFARM_CIC_CONFIG| Ruta al config de `cic` (opcional)         |
 
 ## Licencia
 
-Este proyecto está bajo la Licencia MIT.
+MIT
