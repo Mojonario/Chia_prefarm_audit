@@ -57,7 +57,17 @@ def main():
     logger.info("🔢 Found %d summary records", total)
 
     # 2. Copiar CSV procesado a carpeta de datos web
-    dest_dir = Path.home() / 'Desktop' / 'Chia.report' / 'prefarm_data'
+    # Determinar directorio destino usando solo WEB_DATA_DIR
+    web_dir = os.getenv('WEB_DATA_DIR')
+    if not web_dir:
+        logger.info(
+            "La variable de entorno WEB_DATA_DIR no está definida en .env. "
+            "Por favor añade WEB_DATA_DIR a tu .env (e.g. C:\\Users\\<usuario>\\Directorio\\carpeta o /home/<usuario>/Directorio/carpeta)."
+        )
+        sys.exit(1)
+    dest_dir = Path(web_dir)
+    if not dest_dir.exists():
+        logger.info("El directorio %s no existe. Se creará automáticamente.", dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_file = dest_dir / summary_path.name
     logger.debug('Copying summary CSV to %s', dest_file)

@@ -1,6 +1,14 @@
 # Chia Prefarm Audit Tools
 
-Auditoría y sincronización de la hot wallet del prefarm de Chia, con exportación a CSV e ingestión en PostgreSQL.
+Este proyecto proporciona un flujo completo para auditar y procesar las transacciones de la hot wallet del prefarm de Chia:
+
+- Sincroniza el estado de la wallet (usando `cic sync`).
+- Audita y extrae transacciones de tipo HANDLE_PAYMENT a CSV.
+- Procesa un resumen de transacciones (`warm_us_summary.csv`).
+- Copia el resumen al directorio configurado por `WEB_DATA_DIR` (por ejemplo `C:\Users\<usuario>\Directorio\carpeta` en Windows o `/home/<usuario>/Directorio/carpeta` en Linux).
+- Carga los datos en PostgreSQL en la tabla `prefarmdb`.
+
+Objetivo: facilitar el seguimiento y análisis histórico de los movimientos de prefarm, integrando auditoría, procesamiento y almacenamiento en un único flujo automatizado.
 
 ## Requisitos
 
@@ -15,15 +23,17 @@ Auditoría y sincronización de la hot wallet del prefarm de Chia, con exportaci
 
 ```bash
 git clone https://github.com/Mojonario/Mojonario.git chia_prefarm_audit
-cd chia_prefarm_audit
+cd C:\Users\<usuario>\chia_prefarm_audit  # ir a la carpeta del proyecto
 ```
 
 2. Configurar variables de entorno:
 
-Crear `.env` con:
+Crear `.env` con (reemplaza valores y ruta según tu entorno):
 
 ```env
 DATABASE_URL=postgresql://<user>:<pass>@<host>:<port>/<db>
+# Directorio donde copiar el CSV resumido
+WEB_DATA_DIR=C:\Users\<usuario>\Directorio\carpeta
 ```
 
 3. Crear y activar entorno virtual:
@@ -31,6 +41,7 @@ DATABASE_URL=postgresql://<user>:<pass>@<host>:<port>/<db>
 - Windows (PowerShell):
 
 ```powershell
+cd C:\Users\<usuario>\chia_prefarm_audit  # ir a la carpeta del proyecto
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
@@ -38,6 +49,7 @@ python -m venv venv
 - Ubuntu/Linux (bash):
 
 ```bash
+cd /home/<usuario>/chia_prefarm_audit  # ir a la carpeta del proyecto
 python3 -m venv venv
 source venv/bin/activate
 ```
@@ -68,7 +80,7 @@ Este script ejecuta:
 
 1. `cic sync` y `cic audit` para la hot wallet.
 2. Procesa `csv/warm_us_audit.csv` a `csv/warm_us_summary.csv`.
-3. Copia el resumen a `Desktop/Chia.report/prefarm_data/`.
+3. Copia el resumen a la carpeta definida por `WEB_DATA_DIR`.
 4. Ingiere los datos en la tabla `prefarmdb` de PostgreSQL.
 
 ### Solo ingestión (tienes el summary CSV)
@@ -82,7 +94,6 @@ python scripts/ingest_prefarmdb.py -s csv/warm_us_summary.csv
 ```
 chia_prefarm_audit/
 ├── .env                # Variables reales (no versionar)
-├── .env.utf8           # Plantilla UTF-8
 ├── requirements.txt    # Dependencias pip
 ├── create_prefarmdb.sql# DDL de la tabla prefarmdb
 ├── csv/                # Archivos CSV (raw y summary)
@@ -104,6 +115,7 @@ chia_prefarm_audit/
 |------------------|----------------------------------------------|
 | DATABASE_URL     | Cadena de conexión a PostgreSQL              |
 | PREFARM_CIC_CONFIG| Ruta al config de `cic` (opcional)         |
+| WEB_DATA_DIR     | Directorio para copiar el resumen (opcional) |
 
 ## Licencia
 
