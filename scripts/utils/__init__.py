@@ -1,14 +1,14 @@
-""
-Módulo de utilidades para la auditoría del prefarm de Chia.
+# -*- coding: utf-8 -*-
+"""Utils module for Chia prefarm audit.
 
-Este paquete contiene funciones auxiliares utilizadas por los scripts principales.
+This package contains helper functions used by the main scripts.
 """
 
 __version__ = "0.1.0"
 __author__ = "Chia.report Team"
 __license__ = "MIT"
 
-# Importar funciones principales para facilitar el acceso
+# Import main functions for easier access
 from .config_loader import load_config, validate_config
 from .db_connector import get_db_connection, execute_query, fetch_all
 

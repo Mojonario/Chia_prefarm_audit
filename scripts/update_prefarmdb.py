@@ -6,30 +6,45 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
 import subprocess
 import logging
 
-# Carga variables desde .env
+# Configuración de rutas
 project_root = Path(__file__).resolve().parent.parent
-env_path = project_root / '.env'
-load_dotenv(env_path)
 
 # Añadir carpeta scripts al PATH para importar módulos locales
 scripts_dir = project_root / 'scripts'
 sys.path.insert(0, str(scripts_dir))
 
-from cic_audit_helper import get_cic_executable, audit_wallet, process_audit_csv
-from ingest_prefarmdb import ingest_file
-
-# Setup logging
+# Configuración básica de logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
+# Cargar configuración
+try:
+    from utils.config_loader import load_config
+    config = load_config()
+    logger.setLevel(getattr(logging, config.get('LOG_LEVEL', 'INFO')))
+except ImportError as e:
+    logger.error("Error al cargar la configuración: %s", e)
+    sys.exit(1)
+
+# Importar módulos locales
+try:
+    from cic_audit_helper import get_cic_executable, audit_wallet, process_audit_csv
+    from ingest_prefarmdb import ingest_file
+except ImportError as e:
+    logger.error("Error al importar módulos locales: %s", e)
+    sys.exit(1)
+
 def main():
+    """Función principal que orquesta el proceso de actualización."""
+    # Configuración inicial
+    project_root = Path(__file__).parent.parent
+
     # Rutas y configuración
     # Config and DB path (always use sync folder)
-    config = project_root / 'internal-custody' / 'prefarm_configs' / 'warm-us-public-config.txt'
+    config_file = project_root / 'internal-custody' / 'prefarm_configs' / 'warm-us-public-config.txt'
     db_path = project_root / 'sync' / 'sync_warm_us.sqlite'
     audit_csv = project_root / 'csv' / 'warm_us_audit.csv'
     summary_csv = project_root / 'csv' / 'warm_us_summary.csv'
@@ -42,9 +57,15 @@ def main():
         logger.info("Removing existing sync DB: %s", db_file)
         db_file.unlink()
     cic = get_cic_executable()
-    logger.info("🔄 Running cic sync with config=%s, db=%s", config, db_path)
-    subprocess.run([cic, 'sync', '-c', str(config), '-db', str(db_path)], check=True)
-    logger.info("🔄 cic sync completed")
+    # Usamos el archivo de configuración directamente en lugar del diccionario
+    config_file = project_root / 'internal-custody' / 'prefarm_configs' / 'warm-us-public-config.txt'
+    logger.info("🔄 Running cic sync with config=%s, db=%s", config_file, db_path)
+    try:
+        subprocess.run([cic, 'sync', '-c', str(config_file), '-db', str(db_path)], check=True)
+        logger.info("✅ cic sync completed")
+    except subprocess.CalledProcessError as e:
+        logger.error("❌ Error al ejecutar cic sync: %s", e)
+        return
     logger.info("📊 Running cic audit, output=%s", audit_csv)
     subprocess.run([cic, 'audit', '-db', str(db_path), '-f', str(audit_csv)], check=True)
     logger.info("📊 cic audit completed, raw CSV at %s", audit_csv)
@@ -57,26 +78,61 @@ def main():
     logger.info("🔢 Found %d summary records", total)
 
     # 2. Copiar CSV procesado a carpeta de datos web
-    # Determinar directorio destino usando solo WEB_DATA_DIR
-    web_dir = os.getenv('WEB_DATA_DIR')
-    if not web_dir:
-        logger.info(
-            "La variable de entorno WEB_DATA_DIR no está definida en .env. "
-            "Por favor añade WEB_DATA_DIR a tu .env (e.g. C:\\Users\\<usuario>\\Directorio\\carpeta o /home/<usuario>/Directorio/carpeta)."
-        )
-        sys.exit(1)
-    dest_dir = Path(web_dir)
+    # Obtener directorio de destino de la configuración
+    dest_dir = os.getenv('WEB_DATA_DIR', str(project_root / 'data' / 'prefarm_export'))
+    dest_dir = Path(dest_dir).resolve()  # Convertir a ruta absoluta
+    
+    # Mostrar información de depuración
+    logger.debug("Directorio de destino: %s", dest_dir)
+    
+    # Verificar si el directorio existe, si no, crearlo
     if not dest_dir.exists():
         logger.info("El directorio %s no existe. Se creará automáticamente.", dest_dir)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest_file = dest_dir / summary_path.name
-    logger.debug('Copying summary CSV to %s', dest_file)
+    
+    # Asegurarse de que el directorio exista
     try:
-        shutil.copy2(summary_path, dest_file)
+        dest_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        logger.error('Failed to copy summary CSV: %s', e)
+        logger.error('No se pudo crear el directorio %s: %s', dest_dir, str(e))
         sys.exit(1)
-    logger.info('📁 Summary CSV copied to %s', dest_file)
+    
+    # Crear la ruta completa del archivo de destino
+    dest_file = dest_dir / summary_path.name
+    
+    # Verificar permisos del directorio de destino
+    if not os.access(str(dest_dir), os.W_OK):
+        logger.error('No se tienen permisos de escritura en el directorio de destino: %s', dest_dir)
+        sys.exit(1)
+    
+    # Copiar el archivo
+    try:
+        # Usar una ruta absoluta para el archivo de origen
+        src_path = str(summary_path.resolve())
+        dst_path = str(dest_file)
+        
+        # Debug: Mostrar rutas de origen y destino
+        logger.info("Copiando desde: %s", src_path)
+        logger.info("Copiando a: %s", dst_path)
+        
+        # Verificar que el archivo fuente existe
+        if not os.path.exists(src_path):
+            logger.error('El archivo fuente no existe: %s', src_path)
+            sys.exit(1)
+            
+        # Copiar el archivo
+        shutil.copy2(src_path, dst_path)
+        
+        # Verificar que el archivo se copió correctamente
+        if not os.path.exists(dst_path):
+            logger.error('Error al copiar el archivo a: %s', dst_path)
+            sys.exit(1)
+            
+        logger.info('📁 Summary CSV copiado correctamente a: %s', dst_path)
+        
+    except Exception as e:
+        logger.error('Error al copiar el archivo CSV: %s', str(e))
+        logger.exception('Detalles del error:')
+        sys.exit(1)
 
     # 3. Ingestar en Postgres
     logger.info('🗄️ Ingesting data into table prefarmdb')
